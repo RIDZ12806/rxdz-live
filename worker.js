@@ -109,11 +109,11 @@ const connection = new TikTokLiveConnection(
   }
 );
 
-// New command: /RobloxUsername
+// New join format: RobloxUsername only
 function parseJoinCommand(comment) {
   const match = String(comment ?? "")
     .trim()
-    .match(/^\/([A-Za-z0-9_]{3,20})$/);
+    .match(/^([A-Za-z0-9_]{3,20})$/);
 
   return match ? match[1] : null;
 }
