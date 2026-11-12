@@ -6,6 +6,7 @@ import {
   WebcastEvent,
 } from "tiktok-live-connector";
 
+// Environment variables
 const {
   TIKTOK_USERNAME,
   UPSTASH_REDIS_REST_URL,
@@ -14,7 +15,7 @@ const {
   PORT = "8080",
 } = process.env;
 
-// Check required environment variables
+// Validate configuration
 const required = [
   ["TIKTOK_USERNAME", TIKTOK_USERNAME],
   ["UPSTASH_REDIS_REST_URL", UPSTASH_REDIS_REST_URL],
@@ -26,14 +27,12 @@ const missing = required
   .filter(([, value]) => !value)
   .map(([name]) => name);
 
-if (missing.length > 0) {
-  console.error(
-    `Missing environment variables: ${missing.join(", ")}`
-  );
+if (missing.length) {
+  console.error("Missing variables:", missing.join(", "));
   process.exit(1);
 }
 
-// Redis connection
+// Redis
 const redis = new Redis({
   url: UPSTASH_REDIS_REST_URL,
   token: UPSTASH_REDIS_REST_TOKEN,
@@ -41,17 +40,19 @@ const redis = new Redis({
 
 const QUEUE_KEY = "rxdz:queue";
 
-// Express API
+// HTTP API
 const app = express();
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Roblox pulls viewers from this endpoint
+// Roblox queue endpoint
 app.get("/api/roblox/pull", async (req, res) => {
   if (req.get("X-API-Key") !== RXDZ_API_KEY) {
-    return res.status(401).json({ error: "unauthorized" });
+    return res.status(401).json({
+      error: "unauthorized",
+    });
   }
 
   const parsed = Number.parseInt(
@@ -66,19 +67,21 @@ app.get("/api/roblox/pull", async (req, res) => {
   try {
     const viewers = [];
 
-    for (let i = 0; i < max; i += 1) {
+    for (let i = 0; i < max; i++) {
       const item = await redis.rpop(QUEUE_KEY);
 
       if (!item) break;
 
       viewers.push(
-        typeof item === "string" ? JSON.parse(item) : item
+        typeof item === "string"
+          ? JSON.parse(item)
+          : item
       );
     }
 
     return res.json({ viewers });
   } catch (error) {
-    console.error("Queue read failed:", error);
+    console.error("Redis queue error:", error);
 
     return res.status(500).json({
       error: "queue_read_failed",
@@ -86,7 +89,7 @@ app.get("/api/roblox/pull", async (req, res) => {
   }
 });
 
-// Start HTTP server
+// Start server
 const server = app.listen(
   Number(PORT),
   "0.0.0.0",
@@ -106,7 +109,8 @@ const connection = new TikTokLiveConnection(
   }
 );
 
-// Parse /RX RobloxUsername
+// Parse the exact command:
+// /RX RobloxUsername
 function parseJoinCommand(comment) {
   const match = String(comment ?? "")
     .trim()
@@ -115,24 +119,38 @@ function parseJoinCommand(comment) {
   return match ? match[1] : null;
 }
 
-// Receive TikTok comments
+// Receive chat events
 connection.on(WebcastEvent.CHAT, async (data) => {
   try {
-    const robloxName = parseJoinCommand(data.comment);
-
-    if (!robloxName) return;
+    // Modern and older payload compatibility
+    const comment = String(
+      data.content ?? data.comment ?? ""
+    ).trim();
 
     const tiktokName =
+      data.user?.displayId ||
       data.user?.uniqueId ||
       data.user?.nickname ||
       "TikTokUser";
 
+    // Log every received comment
+    console.log(
+      `TikTok comment received from @${tiktokName}: ${comment}`
+    );
+
+    // Check command
+    const robloxName = parseJoinCommand(comment);
+
+    if (!robloxName) return;
+
+    // Create queue entry
     const entry = {
       tiktok: String(tiktokName).slice(0, 40),
       roblox: robloxName,
       receivedAt: new Date().toISOString(),
     };
 
+    // Add to Redis
     await redis.lpush(
       QUEUE_KEY,
       JSON.stringify(entry)
@@ -149,7 +167,7 @@ connection.on(WebcastEvent.CHAT, async (data) => {
   }
 });
 
-// TikTok error events
+// Connection error events
 connection.on("error", (error) => {
   console.error("TikTok connection error:", error);
 });
@@ -159,17 +177,21 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Keep TikTok connected and retry when needed
+// Connection manager
+let stopping = false;
+
 async function keepTikTokConnected() {
-  while (true) {
+  while (!stopping) {
     try {
       if (!connection.isConnected) {
         console.log(
           `Waiting for TikTok LIVE: @${TIKTOK_USERNAME}`
         );
 
-        // Wait until TikTok detects the LIVE stream
+        // Check LIVE status every 60 seconds
         await connection.waitUntilLive(60);
+
+        if (stopping) break;
 
         console.log("TikTok LIVE detected. Connecting...");
 
@@ -180,38 +202,46 @@ async function keepTikTokConnected() {
         );
       }
 
-      // Wait until the connection is disconnected
+      // Wait for disconnection
       await new Promise((resolve) => {
         connection.once("disconnected", resolve);
       });
 
-      console.log(
-        "TikTok disconnected. Reconnecting..."
-      );
+      if (!stopping) {
+        console.log(
+          "TikTok disconnected. Reconnecting..."
+        );
 
-      await delay(30000);
+        await delay(30000);
+      }
     } catch (error) {
+      if (stopping) break;
+
       console.error(
         "TikTok connection attempt failed:",
         error
       );
 
-      console.log(
-        "Will retry in 60 seconds..."
-      );
-
+      console.log("Retrying in 60 seconds...");
       await delay(60000);
     }
   }
 }
 
-// Start connection manager
+// Start TikTok connection
 keepTikTokConnected().catch((error) => {
-  console.error("TikTok connection manager stopped:", error);
+  console.error(
+    "Connection manager error:",
+    error
+  );
 });
 
 // Graceful shutdown
-process.on("SIGTERM", async () => {
+async function shutdown() {
+  if (stopping) return;
+
+  stopping = true;
+
   console.log("Shutting down RXDZ worker...");
 
   try {
@@ -223,4 +253,7 @@ process.on("SIGTERM", async () => {
   server.close(() => {
     process.exit(0);
   });
-});
+}
+
+process.once("SIGTERM", shutdown);
+process.once("SIGINT", shutdown);
