@@ -43,7 +43,8 @@ if (RXDZ_SESSION_SECRET.length < 32) {
   process.exit(1);
 }
 
-const FRONTEND_ORIGIN = RXDZ_FRONTEND_ORIGIN.replace(/\/$/, "");
+// Pin the production GitHub Pages origin to avoid stale/mismatched Railway env values.
+const FRONTEND_ORIGIN = "https://ridz12806.github.io";
 const SESSION_COOKIE = "rxdz_admin_session";
 const SESSION_DURATION = 12 * 60 * 60 * 1000;
 
