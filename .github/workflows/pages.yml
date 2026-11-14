@@ -40,15 +40,16 @@ jobs:
             window.fetch = (resource, options = {}) => {
               let target = resource;
               const raw = resource instanceof Request ? resource.url : String(resource);
-              if (raw.startsWith("/api/") || raw.startsWith("api/")) {
-                target = backend + (raw.startsWith("/") ? raw : "/" + raw);
-              } else if (raw.startsWith(window.location.origin + "/api/")) {
-                target = backend + raw.slice(window.location.origin.length);
+              try {
+              const parsed = new URL(raw, window.location.href);
+              if (parsed.pathname.startsWith("/api/")) {
+                target = backend + parsed.pathname + parsed.search + parsed.hash;
               }
-              if (resource instanceof Request && target !== resource) {
-                target = new Request(target, resource);
-              }
-              return originalFetch(target, { ...options, credentials: options.credentials || "include" });
+            } catch (_) {}
+            if (resource instanceof Request && target !== resource) {
+              target = new Request(target, resource);
+            }
+            return originalFetch(target, { ...options, credentials: options.credentials || "include" });
             };
           })();
           </script>
