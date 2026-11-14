@@ -18,11 +18,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Extract site files
+      - name: Extract and configure site files
         run: |
           mkdir -p public
           unzip -o RXDZ_CONTROL_PRO_GLASS.zip -d package
           cp -R package/site/. public/
+          python3 - <<'PY'
+          from pathlib import Path
+          backend = "https://rxdz-live-production-84f98571.up.railway.app"
+          shim = """
+          <script>
+          (() => {
+            const backend = "https://rxdz-live-production-84f98571.up.railway.app";
+            const originalFetch = window.fetch.bind(window);
+            window.fetch = (resource, options = {}) => {
+              let target = resource;
+              if (typeof resource === "string" && (resource.startsWith("/api/") || resource.startsWith("api/"))) {
+                target = backend + (resource.startsWith("/") ? resource : "/" + resource);
+              } else if (resource instanceof URL && resource.origin === window.location.origin && resource.pathname.startsWith("/api/")) {
+                target = backend + resource.pathname + resource.search;
+              }
+              return originalFetch(target, { ...options, credentials: options.credentials || "include" });
+            };
+          })();
+          </script>
+          """
+          html_files = list(Path("public").rglob("*.html"))
+          if not html_files:
+              raise SystemExit("No HTML files found in extracted site")
+          for path in html_files:
+              data = path.read_text(encoding="utf-8")
+              if "rxdz-live-production-84f98571.up.railway.app" not in data:
+                  if "</body>" in data:
+                      data = data.replace("</body>", shim + "\\n</body>")
+                  else:
+                      data += shim
+                  path.write_text(data, encoding="utf-8")
+          print("Configured Railway API routing in", len(html_files), "HTML file(s)")
+          PY
           touch public/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
