@@ -23,6 +23,8 @@ jobs:
           mkdir -p public
           unzip -o RXDZ_CONTROL_PRO_GLASS.zip -d package
           cp -R package/site/. public/
+          echo "=== Frontend API references ==="
+          grep -RInE "fetch\\(|XMLHttpRequest|/api/admin/login|API_URL|API_BASE|RAILWAY|netlify" public --include="*.html" --include="*.js" | head -200 || true
           python3 - <<'PY'
           from pathlib import Path
           backend = "https://rxdz-live-production-84f98571.up.railway.app"
