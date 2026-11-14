@@ -35,10 +35,14 @@ jobs:
             const originalFetch = window.fetch.bind(window);
             window.fetch = (resource, options = {}) => {
               let target = resource;
-              if (typeof resource === "string" && (resource.startsWith("/api/") || resource.startsWith("api/"))) {
-                target = backend + (resource.startsWith("/") ? resource : "/" + resource);
-              } else if (resource instanceof URL && resource.origin === window.location.origin && resource.pathname.startsWith("/api/")) {
-                target = backend + resource.pathname + resource.search;
+              const raw = resource instanceof Request ? resource.url : String(resource);
+              if (raw.startsWith("/api/") || raw.startsWith("api/")) {
+                target = backend + (raw.startsWith("/") ? raw : "/" + raw);
+              } else if (raw.startsWith(window.location.origin + "/api/")) {
+                target = backend + raw.slice(window.location.origin.length);
+              }
+              if (resource instanceof Request && target !== resource) {
+                target = new Request(target, resource);
               }
               return originalFetch(target, { ...options, credentials: options.credentials || "include" });
             };
@@ -51,10 +55,12 @@ jobs:
           for path in html_files:
               data = path.read_text(encoding="utf-8")
               if "rxdz-live-production-84f98571.up.railway.app" not in data:
-                  if "</body>" in data:
-                      data = data.replace("</body>", shim + "\\n</body>")
+                  if "<head>" in data:
+                      data = data.replace("<head>", "<head>\\n" + shim, 1)
+                  elif "<HEAD>" in data:
+                      data = data.replace("<HEAD>", "<HEAD>\\n" + shim, 1)
                   else:
-                      data += shim
+                      data = shim + "\\n" + data
                   path.write_text(data, encoding="utf-8")
           print("Configured Railway API routing in", len(html_files), "HTML file(s)")
           PY
