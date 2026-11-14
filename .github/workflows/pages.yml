@@ -96,6 +96,18 @@ jobs:
                   path.write_text(data, encoding="utf-8")
           print("Configured Railway API routing in", len(html_files), "HTML file(s)")
           PY
+          # Point DJ upload and media playback at Railway (not the GitHub Pages origin).
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("public/index.html")
+          if not p.exists():
+              raise SystemExit("public/index.html not found")
+          s = p.read_text(encoding="utf-8")
+          s = s.replace('fetch("/api/admin/dj/upload"', 'fetch(API+"/api/admin/dj/upload"')
+          s = s.replace('("/media/"+encodeURIComponent(x.audioFile))', '(API+"/media/"+encodeURIComponent(x.audioFile))')
+          p.write_text(s, encoding="utf-8")
+          print("Patched DJ upload and audio playback URLs.")
+          PY
           touch public/.nojekyll
       - uses: actions/upload-pages-artifact@v3
         with:
