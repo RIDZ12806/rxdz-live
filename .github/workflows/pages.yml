@@ -23,6 +23,9 @@ jobs:
           mkdir -p public
           unzip -o RXDZ_CONTROL_PRO_GLASS.zip -d package
           cp -R package/site/. public/
+          echo "=== FRONTEND API CONFIG DIAGNOSTIC ==="
+          grep -nE "const API|let API|var API|API[[:space:]]*=|fetch\(API|/api/admin/login|admin/me" public/index.html || true
+          echo "=== END API CONFIG DIAGNOSTIC ==="
           echo "=== Frontend API references ==="
           grep -RInE "fetch\\(|XMLHttpRequest|/api/admin/login|API_URL|API_BASE|RAILWAY|netlify" public --include="*.html" --include="*.js" | head -200 || true
           python3 - <<'PY'
