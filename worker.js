@@ -6,6 +6,8 @@ import {
   WebcastEvent,
 } from "tiktok-live-connector";
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 // Environment variables
 const {
@@ -16,6 +18,7 @@ const {
   RXDZ_ADMIN_PASSWORD,
   RXDZ_SESSION_SECRET,
   RXDZ_FRONTEND_ORIGIN,
+  RXDZ_AUDIO_DIR = "/data/rxdz-audio",
   PORT = "8080",
 } = process.env;
 
@@ -55,6 +58,9 @@ const redis = new Redis({
 
 const QUEUE_KEY = "rxdz:queue";
 const DEMO_CONFIG_KEY = "rxdz:demo:config";
+const DJ_LIBRARY_KEY = "rxdz:dj:library";
+const DJ_CONTROL_KEY = "rxdz:dj:control";
+const AUDIO_DIR = path.resolve(RXDZ_AUDIO_DIR);
 
 const DEFAULT_NAMES = [
   "Builderman", "Guest", "Bacon", "Noob",
@@ -80,7 +86,7 @@ app.use((req, res, next) => {
     );
     res.setHeader(
       "Access-Control-Allow-Methods",
-      "GET, POST, PUT, OPTIONS"
+      "GET, POST, PUT, DELETE, OPTIONS"
     );
     res.setHeader("Vary", "Origin");
   }
@@ -184,6 +190,87 @@ async function getDemoConfig() {
     ? JSON.parse(stored)
     : stored;
 }
+
+
+// RXDZ DJ library and audio storage (requires a Railway Volume mounted at /data).
+async function ensureAudioDir() { await fs.mkdir(AUDIO_DIR, { recursive: true }); }
+async function getDJLibrary() {
+  const stored = await redis.get(DJ_LIBRARY_KEY);
+  return stored ? (typeof stored === "string" ? JSON.parse(stored) : stored) : [];
+}
+async function saveDJLibrary(items) { await redis.set(DJ_LIBRARY_KEY, JSON.stringify(items)); }
+async function getDJControl() {
+  const stored = await redis.get(DJ_CONTROL_KEY);
+  return stored ? (typeof stored === "string" ? JSON.parse(stored) : stored) : { playing: false, activeId: null };
+}
+function cleanDJItem(x) {
+  return {
+    id: String(x.id || crypto.randomUUID()),
+    name: String(x.name || "").trim().slice(0, 80),
+    animationId: String(x.animationId || "").replace(/[^0-9]/g, "").slice(0, 24),
+    audioName: String(x.audioName || "").trim().slice(0, 120),
+    audioFile: String(x.audioFile || "").replace(/[^a-zA-Z0-9._-]/g, ""),
+    audioUrl: String(x.audioUrl || "").trim().slice(0, 1000),
+    startSeconds: Math.max(0, Math.min(3600, Number(x.startSeconds) || 0)),
+    endSeconds: Math.max(0, Math.min(3600, Number(x.endSeconds) || 0)),
+    updatedAt: new Date().toISOString()
+  };
+}
+app.get("/api/admin/dj", requireFrontend, requireAdmin, async (_req, res) => {
+  try { res.json({ items: await getDJLibrary(), control: await getDJControl() }); }
+  catch (e) { console.error("DJ read failed:", e); res.status(500).json({ error: "dj_read_failed" }); }
+});
+app.put("/api/admin/dj", requireFrontend, requireAdmin, async (req, res) => {
+  try {
+    if (!Array.isArray(req.body?.items) || req.body.items.length > 300) return res.status(400).json({ error: "invalid_dj_library" });
+    const items = req.body.items.map(cleanDJItem);
+    if (items.some(x => !x.name || !x.animationId || (!x.audioFile && !/^https:\/\//i.test(x.audioUrl)))) return res.status(400).json({ error: "each_dance_needs_name_animation_and_audio" });
+    await saveDJLibrary(items);
+    res.json({ ok: true, items });
+  } catch (e) { console.error("DJ save failed:", e); res.status(500).json({ error: "dj_save_failed" }); }
+});
+app.post("/api/admin/dj/upload", requireFrontend, requireAdmin, express.raw({ type: () => true, limit: "25mb" }), async (req, res) => {
+  try {
+    const mime = String(req.get("Content-Type") || "").toLowerCase().split(";")[0].trim();
+    if (!mime.startsWith("audio/") && !["application/ogg", "video/mp4"].includes(mime)) return res.status(415).json({ error: "audio_file_required" });
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: "empty_audio_file" });
+    await ensureAudioDir();
+    const extByMime = { "audio/mpeg": ".mp3", "audio/mp3": ".mp3", "audio/wav": ".wav", "audio/x-wav": ".wav", "audio/ogg": ".ogg", "application/ogg": ".ogg", "audio/mp4": ".m4a", "video/mp4": ".m4a", "audio/aac": ".aac", "audio/webm": ".webm" };
+    const filename = crypto.randomUUID() + (extByMime[mime] || ".audio");
+    await fs.writeFile(path.join(AUDIO_DIR, filename), req.body, { flag: "wx" });
+    res.json({ ok: true, filename, url: "/media/" + filename, size: req.body.length });
+  } catch (e) { console.error("Audio upload failed:", e); res.status(e.status === 413 ? 413 : 500).json({ error: e.status === 413 ? "audio_too_large_25mb_max" : "audio_upload_failed" }); }
+});
+app.delete("/api/admin/dj/audio/:filename", requireFrontend, requireAdmin, async (req, res) => {
+  try {
+    const filename = path.basename(req.params.filename);
+    await fs.unlink(path.join(AUDIO_DIR, filename)).catch(e => { if (e.code !== "ENOENT") throw e; });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: "audio_delete_failed" }); }
+});
+app.put("/api/admin/dj/control", requireFrontend, requireAdmin, async (req, res) => {
+  const { playing, activeId, action } = req.body || {};
+  if (typeof playing !== "boolean" || (activeId !== null && typeof activeId !== "string")) return res.status(400).json({ error: "invalid_dj_control" });
+  const state = { playing, activeId: activeId || null, action: String(action || (playing ? "play" : "stop")).slice(0, 16), commandId: crypto.randomUUID(), updatedAt: new Date().toISOString(), startAt: Date.now() + 1800 };
+  await redis.set(DJ_CONTROL_KEY, JSON.stringify(state));
+  res.json({ ok: true, control: state });
+});
+app.get("/api/roblox/dj-control", requireRobloxKey, async (_req, res) => {
+  try {
+    const [control, items] = await Promise.all([getDJControl(), getDJLibrary()]);
+    res.json({ ...control, dance: items.find(x => x.id === control.activeId) || null });
+  } catch (e) { res.status(500).json({ error: "dj_control_read_failed" }); }
+});
+app.get("/media/:filename", async (req, res) => {
+  const filename = path.basename(req.params.filename);
+  if (!/^[a-f0-9-]{36}\.(mp3|wav|ogg|m4a|aac|webm|audio)$/i.test(filename)) return res.sendStatus(404);
+  try {
+    const file = path.join(AUDIO_DIR, filename);
+    await fs.access(file);
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.sendFile(file);
+  } catch { res.sendStatus(404); }
+});
 
 // Admin login
 app.post(
