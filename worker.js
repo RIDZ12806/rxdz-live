@@ -76,7 +76,7 @@ app.use((req, res, next) => {
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader(
       "Access-Control-Allow-Headers",
-      "Content-Type, X-API-Key"
+      "Content-Type, X-API-Key, X-Admin-Token"
     );
     res.setHeader(
       "Access-Control-Allow-Methods",
@@ -130,7 +130,10 @@ function getCookie(req, name) {
 }
 
 function isAuthenticated(req) {
-  const token = getCookie(req, SESSION_COOKIE);
+  // Prefer an explicit bearer-style header for browsers that block
+  // cross-site cookies; retain cookie support for existing clients.
+  const headerToken = req.get("X-Admin-Token");
+  const token = headerToken || getCookie(req, SESSION_COOKIE);
   if (!token) return false;
 
   const [expiryText, signature] = token.split(".");
@@ -204,7 +207,9 @@ app.post(
       path: "/",
     });
 
-    return res.json({ ok: true });
+    // Also return the signed session token for clients that cannot persist
+    // third-party cookies. The frontend stores it and sends X-Admin-Token.
+    return res.json({ ok: true, token });
   }
 );
 
