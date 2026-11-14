@@ -23,6 +23,10 @@ jobs:
           mkdir -p public
           unzip -o RXDZ_CONTROL_PRO_GLASS.zip -d package
           cp -R package/site/. public/
+          echo "=== LIVE BACKEND CORS PREFLIGHT TEST ==="
+          curl -sS -i -X OPTIONS "https://rxdz-live-production-84f98571.up.railway.app/api/admin/login" -H "Origin: https://ridz12806.github.io" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type"
+          echo
+          echo "=== END CORS PREFLIGHT TEST ==="
           echo "=== FRONTEND API CONFIG DIAGNOSTIC ==="
           grep -nE "const API|let API|var API|API[[:space:]]*=|fetch\(API|/api/admin/login|admin/me" public/index.html || true
           echo "=== END API CONFIG DIAGNOSTIC ==="
