@@ -30,6 +30,7 @@ jobs:
           backend = "https://rxdz-live-production-84f98571.up.railway.app"
           shim = """
           <script>
+          /* RXDZ_RAILWAY_FETCH_SHIM */
           (() => {
             const backend = "https://rxdz-live-production-84f98571.up.railway.app";
             const originalFetch = window.fetch.bind(window);
@@ -54,7 +55,7 @@ jobs:
               raise SystemExit("No HTML files found in extracted site")
           for path in html_files:
               data = path.read_text(encoding="utf-8")
-              if "rxdz-live-production-84f98571.up.railway.app" not in data:
+              if "RXDZ_RAILWAY_FETCH_SHIM" not in data:
                   if "<head>" in data:
                       data = data.replace("<head>", "<head>\\n" + shim, 1)
                   elif "<HEAD>" in data:
