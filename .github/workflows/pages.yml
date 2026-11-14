@@ -40,20 +40,43 @@ jobs:
           /* RXDZ_RAILWAY_FETCH_SHIM */
           (() => {
             const backend = "https://rxdz-live-production-84f98571.up.railway.app";
+            const tokenKey = "rxdz_admin_token";
             const originalFetch = window.fetch.bind(window);
-            window.fetch = (resource, options = {}) => {
+            window.fetch = async (resource, options = {}) => {
               let target = resource;
               const raw = resource instanceof Request ? resource.url : String(resource);
+              let apiPath = "";
               try {
-              const parsed = new URL(raw, window.location.href);
-              if (parsed.pathname.startsWith("/api/")) {
-                target = backend + parsed.pathname + parsed.search + parsed.hash;
+                const parsed = new URL(raw, window.location.href);
+                if (parsed.pathname.startsWith("/api/")) {
+                  apiPath = parsed.pathname;
+                  target = backend + parsed.pathname + parsed.search + parsed.hash;
+                }
+              } catch (_) {}
+              const headers = new Headers(resource instanceof Request ? resource.headers : undefined);
+              new Headers(options.headers || {}).forEach((value, key) => headers.set(key, value));
+              const savedToken = localStorage.getItem(tokenKey);
+              if (savedToken && apiPath && apiPath !== "/api/admin/login") {
+                headers.set("X-Admin-Token", savedToken);
               }
-            } catch (_) {}
-            if (resource instanceof Request && target !== resource) {
-              target = new Request(target, resource);
-            }
-            return originalFetch(target, { ...options, credentials: options.credentials || "include" });
+              if (resource instanceof Request && target !== resource) {
+                target = new Request(target, resource);
+              }
+              const response = await originalFetch(target, {
+                ...options,
+                headers,
+                credentials: options.credentials || "include"
+              });
+              if (apiPath === "/api/admin/login" && response.ok) {
+                try {
+                  const data = await response.clone().json();
+                  if (data.token) localStorage.setItem(tokenKey, data.token);
+                } catch (_) {}
+              }
+              if (apiPath === "/api/admin/logout" && response.ok) {
+                localStorage.removeItem(tokenKey);
+              }
+              return response;
             };
           })();
           </script>
